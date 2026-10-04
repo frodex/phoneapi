@@ -65,6 +65,45 @@ class InjectTouchBackend(
         }
     }
 
+    /** One live pointer change. The caller owns the stroke clock ([StrokeEvent.downTime]). */
+    suspend fun injectOne(event: StrokeEvent): Boolean {
+        val proxy = helper.require()
+        val device =
+            try {
+                touchscreen(proxy)
+            } catch (e: RemoteException) {
+                throw ApiException.helperDropped(e)
+            }
+        val phase =
+            when (event.action) {
+                StrokeAction.DOWN -> TouchPhase.DOWN
+                StrokeAction.MOVE -> TouchPhase.MOVE
+                StrokeAction.UP, StrokeAction.CANCEL -> TouchPhase.UP
+            }
+        val action =
+            when (event.action) {
+                StrokeAction.DOWN -> MotionEvent.ACTION_DOWN
+                StrokeAction.MOVE -> MotionEvent.ACTION_MOVE
+                StrokeAction.UP -> MotionEvent.ACTION_UP
+                StrokeAction.CANCEL -> MotionEvent.ACTION_CANCEL
+            }
+        val motion =
+            obtain(
+                event.downTime,
+                event.eventTime,
+                action,
+                listOf(TouchSample(0, event.x, event.y, 0, phase)),
+                device,
+            )
+        try {
+            return withContext(io) { proxy.injectMotionEvent(motion, WAIT_FOR_FINISH) }
+        } catch (e: RemoteException) {
+            throw ApiException.helperDropped(e)
+        } finally {
+            motion.recycle()
+        }
+    }
+
     private suspend fun touchscreen(proxy: IHelper): TouchscreenInfo {
         if (screenProxy === proxy) {
             screen?.let {

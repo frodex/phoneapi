@@ -6,6 +6,8 @@ import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
 import io.ktor.http.HttpHeaders
 import io.ktor.server.testing.ApplicationTestBuilder
+import io.ktor.server.websocket.DefaultWebSocketServerSession
+import io.ktor.websocket.Frame
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.emptyFlow
 import net.die.phoneapi.core.AppsService
@@ -99,6 +101,8 @@ internal class FakeApi {
     var capabilities = allCapabilities()
     var inputTaps = 0
     var imeShow: ImeShowRequest? = null
+    var streamBusy = false
+    var streamAcquired = false
 
     val services: ServerServices =
         ServerServices(
@@ -144,6 +148,28 @@ internal class FakeApi {
             events = emptyFlow(),
             video = VideoFeed { _, _ -> },
             audio = AudioFeed { _ -> },
+            inputStreams =
+                object : net.die.phoneapi.input.InputStreams {
+                    override fun isBusy(): Boolean = streamBusy
+
+                    override fun tryAcquire(): Boolean =
+                        if (streamAcquired) {
+                            false
+                        } else {
+                            streamAcquired = true
+                            true
+                        }
+
+                    override fun release() {
+                        streamAcquired = false
+                    }
+
+                    override suspend fun serve(session: DefaultWebSocketServerSession) {
+                        for (frame in session.incoming) {
+                            if (frame is Frame.Close) break
+                        }
+                    }
+                },
             viewerHtml = { VIEWER_HTML },
             shell = { _ -> ShellResult(exit = 0, stdout = "log") },
             cdp = CdpPipes { _ -> IdlePipe },

@@ -169,6 +169,12 @@ public val phoneApiEndpoints: List<ApiEndpoint> =
             serializer<ActionResult>(),
         ),
         endpoint(
+            ApiMethod.WEBSOCKET,
+            "/v1/input/stream",
+            Scope.CONTROL,
+            "Live touch. One pointer, one socket. JSON text frames down, move, up, and cancel.",
+        ),
+        endpoint(
             ApiMethod.POST,
             "/v1/input/key",
             Scope.CONTROL,

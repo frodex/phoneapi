@@ -18,6 +18,7 @@ import net.die.phoneapi.model.DeviceInfo
 import net.die.phoneapi.model.Event
 import net.die.phoneapi.model.Scope
 import net.die.phoneapi.model.TokenInfo
+import net.die.phoneapi.input.InputStreams
 import net.die.phoneapi.stream.VideoSpec
 
 /**
@@ -39,6 +40,7 @@ data class ServerServices(
     val events: Flow<Event>,
     val video: VideoFeed,
     val audio: AudioFeed,
+    val inputStreams: InputStreams,
     val viewerHtml: suspend () -> ByteArray,
     val shell: suspend (List<String>) -> ShellResult,
     val cdp: CdpPipes,

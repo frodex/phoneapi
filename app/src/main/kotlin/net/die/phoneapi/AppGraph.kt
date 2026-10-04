@@ -39,6 +39,7 @@ import net.die.phoneapi.helperclient.WirelessPairing
 import net.die.phoneapi.input.Humanizer
 import net.die.phoneapi.input.InjectKeyBackend
 import net.die.phoneapi.input.InjectTouchBackend
+import net.die.phoneapi.input.InputStreamHub
 import net.die.phoneapi.input.InputServiceImpl
 import net.die.phoneapi.input.TouchInput
 import net.die.phoneapi.model.ActionResult
@@ -127,10 +128,14 @@ class AppGraph(
         )
 
     val keys = InjectKeyBackend(helper, ioDispatcher)
-    val touch =
-        TouchInput(InjectTouchBackend(helper, ioDispatcher), Humanizer()) {
-            deviceInfo.display()
-        }
+    val touchBackend = InjectTouchBackend(helper, ioDispatcher)
+    val touch = TouchInput(touchBackend, Humanizer()) { deviceInfo.display() }
+    val inputStreams =
+        InputStreamHub(
+            now = { android.os.SystemClock.uptimeMillis() },
+            bounds = { deviceInfo.logicalSize() },
+            inject = { event -> touchBackend.injectOne(event) },
+        )
     val screenshots = Screenshotter(ioDispatcher, ::helperScreenshot)
     val power: PowerService =
         PowerServiceImpl(
@@ -212,6 +217,7 @@ class AppGraph(
             events = bus.events,
             video = VideoFeed { session, spec -> this.video.serve(session, spec) },
             audio = AudioFeed { session -> this.audio.serve(session) },
+            inputStreams = this.inputStreams,
             viewerHtml = { asset("viewer.html") },
             shell = { argv -> this.shell.exec(argv) },
             cdp = HelperCdpPipes(::openDevtools, ioDispatcher),

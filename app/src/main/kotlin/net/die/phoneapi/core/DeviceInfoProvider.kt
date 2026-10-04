@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
 import android.os.Build
+import android.graphics.Point
 import android.view.Display
 import net.die.phoneapi.model.Capabilities
 import net.die.phoneapi.model.DeviceInfo
@@ -69,6 +70,8 @@ class DeviceInfoProvider(
             context.getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
         val metrics = context.resources.displayMetrics
         val mode = display.mode
+        // physicalWidth ignores `wm size`. /v1/device reports that panel size. Live touch clamps
+        // with logicalSize(), which follows a resolution override (this S9+: 1080×2220, not 1440×2960).
         val rotated = display.rotation % 2 == 1
         val (w, h) = mode.physicalWidth to mode.physicalHeight
         return DisplayInfo(
@@ -78,6 +81,16 @@ class DeviceInfoProvider(
             rotation = display.rotation,
             refreshRate = mode.refreshRate,
         )
+    }
+
+    /** Size apps and injected touches use. Follows a resolution override; [display] does not. */
+    @Suppress("DEPRECATION")
+    fun logicalSize(): Pair<Int, Int> {
+        val display =
+            context.getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
+        val point = Point()
+        display.getRealSize(point)
+        return point.x to point.y
     }
 
     private fun readVersion(): String =
