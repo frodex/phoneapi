@@ -10,16 +10,19 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.RemoteException
+import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import io.ktor.server.websocket.DefaultWebSocketServerSession
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
+import io.ktor.websocket.readText
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.coroutines.cancellation.CancellationException
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -27,6 +30,8 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
@@ -72,6 +77,8 @@ internal class VideoStream(
     private var activeHeight = 0
     private var listening = false
     private var displayJob: Job? = null
+    private var mirror: OnDemandMirror? = null
+    private val lastPictureAt = AtomicLong(0)
 
     private val displayListener =
         object : DisplayManager.DisplayListener {
@@ -99,8 +106,19 @@ internal class VideoStream(
                 }
             session.send(Frame.Text(header))
             config?.let { session.send(Frame.Binary(true, it)) }
-            requestSync()
-            sendFrames(session, viewer)
+            val notes = Channel<String>(CHANNEL_CAP, BufferOverflow.DROP_OLDEST)
+            demandKey("join")
+            coroutineScope {
+                val beats = launch { heartbeats(notes) }
+                val inbound = launch { readSync(session) }
+                try {
+                    sendFrames(session, viewer, notes)
+                } finally {
+                    beats.cancel()
+                    inbound.cancel()
+                    notes.close()
+                }
+            }
             if (viewer.failed) {
                 session.close(
                     CloseReason(CloseReason.Codes.INTERNAL_ERROR, "The video encoder stopped")
@@ -120,18 +138,41 @@ internal class VideoStream(
         }
     }
 
-    private suspend fun sendFrames(session: DefaultWebSocketServerSession, viewer: Viewer) {
+    private suspend fun sendFrames(
+        session: DefaultWebSocketServerSession,
+        viewer: Viewer,
+        notes: Channel<String>,
+    ) {
         var open = true
         while (open) {
             // select is biased to the first clause, so a size-change header always goes out
             // before the codec-config frame of the encoder that follows it.
             val out: Frame? = select {
                 viewer.headers.onReceiveCatching { it.getOrNull()?.let(Frame::Text) }
+                notes.onReceiveCatching { it.getOrNull()?.let(Frame::Text) }
                 viewer.frames.onReceiveCatching { result ->
                     result.getOrNull()?.let { Frame.Binary(true, it) }
                 }
             }
             if (out == null) open = false else session.send(out)
+        }
+    }
+
+    private suspend fun heartbeats(notes: Channel<String>) {
+        val beat = VideoHeartbeat()
+        val opened = SystemClock.elapsedRealtime()
+        beat.open(opened)
+        while (true) {
+            val text = beat.poll(SystemClock.elapsedRealtime(), lastPictureAt.get())
+            if (text != null) notes.trySend(text)
+            delay(200)
+        }
+    }
+
+    private suspend fun readSync(session: DefaultWebSocketServerSession) {
+        for (frame in session.incoming) {
+            val text = (frame as? Frame.Text)?.readText() ?: continue
+            if (isSyncFrame(text)) demandKey("sync")
         }
     }
 
@@ -185,7 +226,7 @@ internal class VideoStream(
             closeViewers()
             return
         }
-        requestSync()
+        demandKey("sync")
     }
 
     private fun beginEncoder(spec: VideoSpec, width: Int, height: Int) {
@@ -203,8 +244,10 @@ internal class VideoStream(
             encoder.start()
             running = true
             codec = encoder
+            val created = OnDemandMirror(surface, width, height)
+            mirror = created
             val started =
-                helper.require().startMirror(surface, width, height, Display.DEFAULT_DISPLAY)
+                helper.require().startMirror(created.start(), width, height, Display.DEFAULT_DISPLAY)
             if (!started) {
                 throw ApiException.unavailable(
                     "stream_error",
@@ -328,6 +371,7 @@ internal class VideoStream(
         val payload = if (key) withParameterSets(annex) else annex
         val type = if (key) FRAME_KEY else FRAME_DELTA
         emitFrame(packFrame(type, info.presentationTimeUs, payload))
+        lastPictureAt.set(SystemClock.elapsedRealtime())
         lease.renew()
     }
 
@@ -371,7 +415,14 @@ internal class VideoStream(
         return sets + annex
     }
 
-    private fun requestSync() {
+    /** One sync parameter, then one redraw of the last picture. A timer never reaches this. */
+    private fun demandKey(event: String) {
+        val step = stillStep(event)
+        if (step.syncs > 0) applySyncParameter()
+        if (step.redraws > 0) mirror?.demand()
+    }
+
+    private fun applySyncParameter() {
         val current = codec ?: return
         if (!running) return
         val bundle = Bundle()
@@ -431,6 +482,7 @@ internal class VideoStream(
         configFrame = null
         spsPps = null
         stopMirrorQuietly()
+        stopMirror()
         releaseCodec(encoder)
     }
 
@@ -441,6 +493,7 @@ internal class VideoStream(
         configFrame = null
         spsPps = null
         stopMirrorQuietly()
+        stopMirror()
         if (current != null) releaseCodec(current)
     }
 
@@ -448,6 +501,12 @@ internal class VideoStream(
         releaseEncoder()
         activeSpec = null
         stopListening()
+    }
+
+    private fun stopMirror() {
+        val current = mirror
+        mirror = null
+        current?.stop()
     }
 
     private fun stopMirrorQuietly() {
