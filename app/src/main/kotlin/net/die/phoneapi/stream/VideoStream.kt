@@ -79,6 +79,7 @@ internal class VideoStream(
     private var displayJob: Job? = null
     private var mirror: OnDemandMirror? = null
     private val lastPictureAt = AtomicLong(0)
+    private val lastDrainAt = AtomicLong(0)
 
     private val displayListener =
         object : DisplayManager.DisplayListener {
@@ -107,15 +108,18 @@ internal class VideoStream(
             session.send(Frame.Text(header))
             config?.let { session.send(Frame.Binary(true, it)) }
             val notes = Channel<String>(CHANNEL_CAP, BufferOverflow.DROP_OLDEST)
+            val joinedAt = SystemClock.elapsedRealtime()
             demandKey("join")
             coroutineScope {
                 val beats = launch { heartbeats(notes) }
                 val inbound = launch { readSync(session) }
+                val retries = launch { retryUntilKey(viewer, joinedAt) }
                 try {
                     sendFrames(session, viewer, notes)
                 } finally {
                     beats.cancel()
                     inbound.cancel()
+                    retries.cancel()
                     notes.close()
                 }
             }
@@ -151,7 +155,10 @@ internal class VideoStream(
                 viewer.headers.onReceiveCatching { it.getOrNull()?.let(Frame::Text) }
                 notes.onReceiveCatching { it.getOrNull()?.let(Frame::Text) }
                 viewer.frames.onReceiveCatching { result ->
-                    result.getOrNull()?.let { Frame.Binary(true, it) }
+                    result.getOrNull()?.let { bytes ->
+                        if (bytes.isNotEmpty() && bytes[0].toInt() == FRAME_KEY) viewer.sawKey = true
+                        Frame.Binary(true, bytes)
+                    }
                 }
             }
             if (out == null) open = false else session.send(out)
@@ -163,9 +170,42 @@ internal class VideoStream(
         val opened = SystemClock.elapsedRealtime()
         beat.open(opened)
         while (true) {
-            val text = beat.poll(SystemClock.elapsedRealtime(), lastPictureAt.get())
+            val now = SystemClock.elapsedRealtime()
+            val helperUp = helperAnswers()
+            // A still screen submits no buffer, so the codec callback does not run. The drain
+            // clock stays fresh only while that callback's codec is still the live one.
+            if (helperUp && encoderHeld()) lastDrainAt.set(now)
+            val text = beat.poll(now, lastPictureAt.get(), helperUp, lastDrainAt.get())
             if (text != null) notes.trySend(text)
             delay(200)
+        }
+    }
+
+    /** Binder round-trip. A dead helper throws; a missing binder does not answer. */
+    private fun helperAnswers(): Boolean {
+        val proxy = helper.getOrNull() ?: return false
+        return try {
+            proxy.pid()
+            true
+        } catch (e: RemoteException) {
+            false
+        }
+    }
+
+    private fun encoderHeld(): Boolean = running && codec != null
+
+    /**
+     * The join sync does not apply to a buffer already submitted, and that key is not queued
+     * if it was emitted before this viewer was subscribed. Retry while no key has been sent.
+     */
+    private suspend fun retryUntilKey(viewer: Viewer, joinedAt: Long) {
+        val watch = JoinKeyWatch()
+        watch.onJoin(joinedAt)
+        while (true) {
+            delay(KEY_RETRY_MS)
+            if (viewer.sawKey) return
+            if (!watch.retryDue(SystemClock.elapsedRealtime())) return
+            demandKey("join")
         }
     }
 
@@ -371,7 +411,9 @@ internal class VideoStream(
         val payload = if (key) withParameterSets(annex) else annex
         val type = if (key) FRAME_KEY else FRAME_DELTA
         emitFrame(packFrame(type, info.presentationTimeUs, payload))
-        lastPictureAt.set(SystemClock.elapsedRealtime())
+        val now = SystemClock.elapsedRealtime()
+        lastPictureAt.set(now)
+        lastDrainAt.set(now)
         lease.renew()
     }
 
@@ -561,6 +603,9 @@ internal class VideoStream(
         val headers = Channel<String>(Channel.CONFLATED)
 
         @Volatile var failed = false
+
+        /** Set only once a key is taken off this viewer's queue to be sent. A dropped key stays false. */
+        @Volatile var sawKey = false
 
         fun close() {
             frames.close()

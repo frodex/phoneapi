@@ -39,6 +39,58 @@ internal fun shouldSubmit(reason: String, haveFrame: Boolean): Boolean =
 
 internal const val HEARTBEAT_EVERY_MS = 1000L
 
+/** A join with no key gets another sync plus redraw after this long, up to [KEY_RETRY_LIMIT] times. */
+internal const val KEY_RETRY_MS = 300L
+
+internal const val KEY_RETRY_LIMIT = 3
+
+/** Helper answer and encoder drain must both be at least this fresh, or the heartbeat stops. */
+internal const val PIPELINE_FRESH_MS = 1000L
+
+/**
+ * A key emitted before this viewer is in [subscribers] is not queued for them.
+ * Join adds the viewer before [demandKey], so the join's own sync is visible; a redraw that
+ * already submitted its buffer before that add is not.
+ */
+internal fun viewerReceivesEmittedKey(alreadySubscribed: Boolean): Boolean = alreadySubscribed
+
+/**
+ * This encoder answers requestSync on the next input buffer only. A buffer submitted before
+ * setParameters is not a key, and on a still screen that in-flight redraw may be the only one.
+ */
+internal fun syncAppliesTo(bufferSubmittedBeforeSync: Boolean): Boolean = !bufferSubmittedBeforeSync
+
+internal class JoinKeyWatch {
+    var attempts = 0
+        private set
+
+    private var lastAttemptAt = Long.MIN_VALUE
+    private var sawKey = false
+
+    /** The join's first sync plus redraw. */
+    fun onJoin(now: Long): Boolean {
+        attempts = 1
+        lastAttemptAt = now
+        return true
+    }
+
+    fun onKey() {
+        sawKey = true
+    }
+
+    /** True when another sync plus redraw is due. Stops after [KEY_RETRY_LIMIT] retries. */
+    fun retryDue(now: Long): Boolean {
+        if (sawKey || attempts >= 1 + KEY_RETRY_LIMIT) return false
+        if (now - lastAttemptAt < KEY_RETRY_MS) return false
+        attempts += 1
+        lastAttemptAt = now
+        return true
+    }
+}
+
+internal fun pipelineUp(helperAnswered: Boolean, lastDrainAt: Long, now: Long): Boolean =
+    helperAnswered && now - lastDrainAt <= PIPELINE_FRESH_MS
+
 internal fun aliveJson(ageMs: Long): String = """{"t":"alive","lastFrameMs":$ageMs}"""
 
 internal fun isSyncFrame(text: String): Boolean = """"t"\s*:\s*"sync"""".toRegex().containsMatchIn(text)
@@ -52,7 +104,8 @@ internal class VideoHeartbeat {
         openedAt = now
     }
 
-    fun poll(now: Long, lastFrameAt: Long): String? {
+    fun poll(now: Long, lastFrameAt: Long, helperAnswered: Boolean, lastDrainAt: Long): String? {
+        if (!pipelineUp(helperAnswered, lastDrainAt, now)) return null
         if (lastSentAt != Long.MIN_VALUE && now - lastSentAt < HEARTBEAT_EVERY_MS) return null
         lastSentAt = now
         val origin = if (lastFrameAt > 0) lastFrameAt else openedAt
