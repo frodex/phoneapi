@@ -9,13 +9,20 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
 import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.readText
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import net.die.phoneapi.input.InputStreamHub
+import net.die.phoneapi.input.StrokeAction
+import net.die.phoneapi.input.StrokeEvent
 import net.die.phoneapi.model.Scope
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -91,6 +98,57 @@ class InputRouteTest {
                     }
                     first.cancel()
                 }
+            }
+        }
+    }
+
+    @Test
+    fun `R1 an inject that throws on move releases the slot and accepts a new stream`() = testApplication {
+        val events = mutableListOf<StrokeEvent>()
+        val hub =
+            InputStreamHub(
+                now = { 1_000L },
+                bounds = { 1080 to 2220 },
+                inject = { event ->
+                    events += event
+                    if (event.action == StrokeAction.MOVE) error("helperDropped")
+                },
+            )
+        val api = FakeApi()
+        val control = api.tokens.issue("control", setOf(Scope.CONTROL))
+        application { phoneApiModule(api.services.copy(inputStreams = hub)) }
+        apiClient().use { client ->
+            withTimeout(5.seconds) {
+                try {
+                    client.webSocket("/v1/input/stream", { bearer(control) }) {
+                        send(Frame.Text("""{"t":"down","x":4,"y":5,"seq":1}"""))
+                        send(Frame.Text("""{"t":"move","x":6,"y":5,"seq":2}"""))
+                        while (true) {
+                            incoming.receive()
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // The failed injection closes this socket.
+                }
+                while (!hub.tryAcquire()) yield()
+            }
+            assertFalse(hub.isBusy())
+            assertEquals(
+                listOf(StrokeAction.DOWN, StrokeAction.MOVE, StrokeAction.CANCEL),
+                events.map { it.action },
+            )
+            hub.release()
+            withTimeout(5.seconds) {
+                client.webSocket("/v1/input/stream", { bearer(control) }) {
+                    send(Frame.Text("""{"t":"down","x":1,"y":1,"seq":1}"""))
+                    val frame = incoming.receive()
+                    assertTrue(frame is Frame.Text)
+                    val text = (frame as Frame.Text).readText()
+                    assertTrue(text.contains("\"t\":\"ack\""), text)
+                }
+                while (hub.isBusy()) yield()
             }
         }
     }

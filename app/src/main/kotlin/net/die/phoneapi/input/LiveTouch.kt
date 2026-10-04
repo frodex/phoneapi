@@ -2,9 +2,11 @@ package net.die.phoneapi.input
 
 import io.ktor.websocket.CloseReason
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import net.die.phoneapi.core.ApiJson
 import net.die.phoneapi.model.ApiException
@@ -193,28 +195,71 @@ class LiveTouch(
     }
 
     private suspend fun drain(first: Item) {
-        var current: Item? = first
-        while (current != null) {
-            val item = current
-            val eventTime = stamp()
-            if (item.action == StrokeAction.DOWN) downTime = eventTime
-            inject(StrokeEvent(item.action, item.x, item.y, downTime, eventTime))
-            if (item.action == StrokeAction.UP || item.action == StrokeAction.CANCEL) {
-                state.withLock {
-                    stroke = false
-                    ending = false
+        var failed = false
+        try {
+            var current: Item? = first
+            while (current != null) {
+                val item = current
+                val eventTime = stamp()
+                if (item.action == StrokeAction.DOWN) downTime = eventTime
+                try {
+                    inject(StrokeEvent(item.action, item.x, item.y, downTime, eventTime))
+                } catch (e: Throwable) {
+                    // helperDropped leaves this function via finally, which clears the pump.
+                    failed = true
+                    throw e
                 }
+                if (item.action == StrokeAction.UP || item.action == StrokeAction.CANCEL) {
+                    state.withLock {
+                        stroke = false
+                        ending = false
+                    }
+                }
+                if (item.seq >= 0) {
+                    replies.trySend(StreamReply(t = "ack", seq = item.seq, injectedAtMs = now()))
+                }
+                current =
+                    pumpLock.withLock {
+                        val next = coalesced
+                        coalesced = null
+                        if (next == null) pumping = false
+                        next
+                    }
             }
-            if (item.seq >= 0) {
-                replies.trySend(StreamReply(t = "ack", seq = item.seq, injectedAtMs = now()))
-            }
-            current =
+        } finally {
+            if (failed) {
+                // Leave pumping clear before the exception escapes, so join() does not spin
+                // and serve can return to release the slot.
                 pumpLock.withLock {
-                    val next = coalesced
+                    pumping = false
                     coalesced = null
-                    if (next == null) pumping = false
-                    next
                 }
+                val point =
+                    state.withLock {
+                        val down = stroke
+                        stroke = false
+                        ending = false
+                        if (down) x to y else null
+                    }
+                if (point != null) {
+                    try {
+                        withContext(NonCancellable) {
+                            val eventTime = stamp()
+                            inject(
+                                StrokeEvent(
+                                    StrokeAction.CANCEL,
+                                    point.first,
+                                    point.second,
+                                    downTime,
+                                    eventTime,
+                                )
+                            )
+                        }
+                    } catch (_: Throwable) {
+                        // The helper is already dead. The stroke is cleared either way.
+                    }
+                }
+            }
         }
     }
 
