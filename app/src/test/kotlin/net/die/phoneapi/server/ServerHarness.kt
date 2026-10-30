@@ -8,6 +8,7 @@ import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.server.testing.ApplicationTestBuilder
+import java.util.Collections
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -24,7 +25,9 @@ import net.die.phoneapi.core.PowerService
 import net.die.phoneapi.core.UiService
 import net.die.phoneapi.core.WaitService
 import net.die.phoneapi.helperclient.ShellResult
+import net.die.phoneapi.lease.CleanupResult
 import net.die.phoneapi.lease.ForegroundWatch
+import net.die.phoneapi.lease.ScreenCleanup
 import net.die.phoneapi.lease.ScreenLease
 import net.die.phoneapi.model.ActionResult
 import net.die.phoneapi.model.ApiException
@@ -68,6 +71,7 @@ import net.die.phoneapi.model.NodeActionRequest
 import net.die.phoneapi.model.OrientationRequest
 import net.die.phoneapi.model.PointerFrame
 import net.die.phoneapi.model.Scope
+import net.die.phoneapi.model.ScreenCleanupOnRelease
 import net.die.phoneapi.model.ScreenState
 import net.die.phoneapi.model.SessionStarted
 import net.die.phoneapi.model.SnapshotOptions
@@ -141,15 +145,63 @@ internal class FakeApi(leaseWaitMs: Long = ScreenLease.WAIT_MS) {
     /** Runs after a pointer stream's channel closes and before the pointer call returns. */
     @Volatile var afterPointer: suspend () -> Unit = {}
     @Volatile var cleanups = 0
+    @Volatile var cleanupPolicy = ScreenCleanupOnRelease.HOME_LOCK
+    val cleanupActions: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
+    private val cleanupInput: InputService =
+        object : InputService {
+            override suspend fun tap(request: TapRequest): ActionResult {
+                inputTaps++
+                return acted()
+            }
+
+            override suspend fun swipe(request: SwipeRequest) = acted()
+
+            override suspend fun gesture(request: GestureRequest) = acted()
+
+            override suspend fun pointer(frames: ReceiveChannel<PointerFrame>) {
+                val seen = mutableListOf<PointerFrame>()
+                for (frame in frames) seen.add(frame)
+                afterPointer()
+                pointerSessions.send(seen)
+            }
+
+            override suspend fun key(request: KeyRequest): ActionResult {
+                cleanupActions += request.key
+                return acted()
+            }
+
+            override suspend fun text(request: TextRequest) = acted()
+
+            override suspend fun hideIme(): ActionResult {
+                cleanupActions += "hide"
+                return acted()
+            }
+
+            override suspend fun showIme(request: ImeShowRequest): ActionResult {
+                imeShow = request
+                return acted()
+            }
+        }
+
+    private val cleanupPower: PowerService =
+        object : PowerService by FakePower {
+            override suspend fun lock(): ActionResult {
+                cleanupActions += "lock"
+                return acted()
+            }
+
+            override suspend fun orientation(request: OrientationRequest): ActionResult {
+                this@FakeApi.orientation = request
+                return acted()
+            }
+        }
 
     val tabStore = MemoryTabStore()
     val lease: ScreenLease =
         ScreenLease(
             CoroutineScope(Dispatchers.Default),
-            cleanup = {
-                cleanups++
-                emptyList()
-            },
+            cleanup = { releaseCleanup() },
             waitMs = leaseWaitMs,
         )
 
@@ -169,45 +221,11 @@ internal class FakeApi(leaseWaitMs: Long = ScreenLease.WAIT_MS) {
     val services: ServerServices =
         ServerServices(
             ui = FakeUi,
-            input =
-                object : InputService {
-                    override suspend fun tap(request: TapRequest): ActionResult {
-                        inputTaps++
-                        return acted()
-                    }
-
-                    override suspend fun swipe(request: SwipeRequest) = acted()
-
-                    override suspend fun gesture(request: GestureRequest) = acted()
-
-                    override suspend fun pointer(frames: ReceiveChannel<PointerFrame>) {
-                        val seen = mutableListOf<PointerFrame>()
-                        for (frame in frames) seen.add(frame)
-                        afterPointer()
-                        pointerSessions.send(seen)
-                    }
-
-                    override suspend fun key(request: KeyRequest) = acted()
-
-                    override suspend fun text(request: TextRequest) = acted()
-
-                    override suspend fun hideIme() = acted()
-
-                    override suspend fun showIme(request: ImeShowRequest): ActionResult {
-                        imeShow = request
-                        return acted()
-                    }
-                },
+            input = cleanupInput,
             apps = FakeApps,
             waits = waits,
             browser = browser,
-            power =
-                object : PowerService by FakePower {
-                    override suspend fun orientation(request: OrientationRequest): ActionResult {
-                        this@FakeApi.orientation = request
-                        return acted()
-                    }
-                },
+            power = cleanupPower,
             clipboard =
                 object : ClipboardService {
                     override suspend fun read(request: ClipboardReadRequest): ClipboardContent {
@@ -243,7 +261,8 @@ internal class FakeApi(leaseWaitMs: Long = ScreenLease.WAIT_MS) {
             ioDispatcher = Dispatchers.Unconfined,
             device =
                 object : DeviceFacts {
-                    override fun info(): DeviceInfo = deviceInfo(capabilities)
+                    override fun info(): DeviceInfo =
+                        deviceInfo(capabilities).copy(screenCleanupOnRelease = cleanupPolicy)
 
                     override fun capabilities(): Capabilities = capabilities
 
@@ -263,6 +282,19 @@ internal class FakeApi(leaseWaitMs: Long = ScreenLease.WAIT_MS) {
             tabs = Tabs(browser, lease, inFront = { false }, store = tabStore),
             foreground = foreground,
         )
+
+    private suspend fun releaseCleanup(): CleanupResult {
+        val result =
+            ScreenCleanup(
+                    cleanupInput,
+                    cleanupPower,
+                    showPlaceholder = { cleanupActions += "placeholder" },
+                    policy = { cleanupPolicy },
+                )
+                .run()
+        cleanups++
+        return result
+    }
 
     private object IdlePipe : CdpPipe {
         override fun handshake() = Unit

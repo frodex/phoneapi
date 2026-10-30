@@ -10,11 +10,15 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import net.die.phoneapi.model.ApiException
+import net.die.phoneapi.model.ScreenCleanupOnRelease
+import net.die.phoneapi.server.FakeApi
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.EnumSource
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ScreenLeaseTest {
@@ -31,7 +35,7 @@ class ScreenLeaseTest {
             scope = scope,
             cleanup = {
                 cleanups++
-                failures
+                CleanupResult(failures = failures)
             },
             now = { testScheduler.currentTime },
         )
@@ -172,7 +176,11 @@ class ScreenLeaseTest {
         runCurrent()
         val first = lease.withScreen(b) {}
         assertEquals(1, first.notes.size)
-        assertTrue(first.notes.single().contains("lock: no keyguard"))
+        assertEquals(
+            "Cleanup after the last holder did not finish: lock: no keyguard. " +
+                "Check the screen before acting.",
+            first.notes.single(),
+        )
         assertEquals(emptyList<String>(), lease.withScreen(b) {}.notes)
     }
 
@@ -237,7 +245,7 @@ class ScreenLeaseTest {
                 scope = backgroundScope,
                 cleanup = {
                     gate.await()
-                    emptyList()
+                    CleanupResult()
                 },
                 now = { testScheduler.currentTime },
             )
@@ -249,6 +257,78 @@ class ScreenLeaseTest {
         assertFalse(lease.viewerInput(person))
         gate.complete(Unit)
         assertEquals("b", waiting.await().value)
+    }
+
+    @ParameterizedTest
+    @EnumSource(ScreenCleanupOnRelease::class)
+    fun `policy transfer and notes`(mode: ScreenCleanupOnRelease) {
+        runTest {
+            for (idle in listOf(false, true)) {
+                val api = FakeApi()
+                val cleanup =
+                    ScreenCleanup(
+                        api.services.input,
+                        api.services.power,
+                        showPlaceholder = { api.cleanupActions += "placeholder" },
+                        policy = { mode },
+                    )
+                val lease =
+                    ScreenLease(backgroundScope, cleanup::run, now = { testScheduler.currentTime })
+                lease.withScreen(a) {}
+                val next = async { lease.withScreen(b) {} }
+                runCurrent()
+                if (idle) advanceTimeBy(ScreenLease.GRACE_MS + 1) else lease.release(a)
+                runCurrent()
+                val result = next.await()
+                assertEquals(expectedActions(mode), api.cleanupActions)
+                assertTrue(lease.holds(b))
+                assertTrue(
+                    result.notes.contains(expectedCleanupNote(mode)),
+                    result.notes.toString(),
+                )
+                if (mode != ScreenCleanupOnRelease.HOME_LOCK) {
+                    assertFalse(lease.takeNotes(a).any { it.contains("home and locked") })
+                }
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(ScreenCleanupOnRelease::class)
+    fun `cleanup exceptions`(mode: ScreenCleanupOnRelease) {
+        runTest {
+            val api = FakeApi()
+            val cleanup =
+                ScreenCleanup(
+                    api.services.input,
+                    api.services.power,
+                    showPlaceholder = { api.cleanupActions += "placeholder" },
+                    policy = { mode },
+                )
+            var calls = 0
+            val lease =
+                ScreenLease(
+                    backgroundScope,
+                    {
+                        calls++
+                        cleanup.run()
+                    },
+                    now = { testScheduler.currentTime },
+                )
+            lease.release(a)
+            lease.withScreen(a) {}
+            val waiting = async { lease.withScreen(b) {} }
+            runCurrent()
+            waiting.cancel()
+            runCurrent()
+            lease.takeOver(person)
+            lease.release(person)
+            advanceTimeBy(ScreenLease.GRACE_MS * 2)
+            runCurrent()
+            assertTrue(lease.holds(a))
+            assertEquals(0, calls)
+            assertEquals(emptyList<String>(), api.cleanupActions)
+        }
     }
 
     private suspend fun apiError(block: suspend () -> Unit): ApiException =

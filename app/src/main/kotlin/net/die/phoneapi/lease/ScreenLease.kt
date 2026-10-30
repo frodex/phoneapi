@@ -57,7 +57,7 @@ data class Screened<T>(val value: T, val notes: List<String>)
  */
 class ScreenLease(
     private val scope: CoroutineScope,
-    private val cleanup: suspend () -> List<String>,
+    private val cleanup: suspend () -> CleanupResult,
     private val now: () -> Long = System::currentTimeMillis,
     private val waitMs: Long = WAIT_MS,
     private val graceMs: Long = GRACE_MS,
@@ -224,7 +224,7 @@ class ScreenLease(
         note(
             holder,
             "The screen went to another client after this session made no screen call for " +
-                "${graceMs / MS_PER_S} s while it waited, and was cleaned up: home and locked. " +
+                "${graceMs / MS_PER_S} s while it waited. Release cleanup follows the device policy. " +
                 "Your next call that needs the screen waits for it. Check the screen before acting.",
         )
         return letGo(holder, cleanup = true)
@@ -241,7 +241,7 @@ class ScreenLease(
         if (queue.isNotEmpty()) watchIdle()
     }
 
-    private suspend fun runCleanup(): List<String> =
+    private suspend fun runCleanup(): CleanupResult =
         try {
             cleanup()
         } catch (e: CancellationException) {
@@ -249,23 +249,13 @@ class ScreenLease(
         } catch (
             @Suppress("TooGenericExceptionCaught") // A failed step is reported, not thrown.
             e: Exception) {
-            listOf(e.message ?: "cleanup failed")
+            CleanupResult(policy = null, failures = listOf(e.message ?: "cleanup failed"))
         }
 
-    private suspend fun finishCleanup(failed: List<String>) {
+    private suspend fun finishCleanup(result: CleanupResult) {
         mutex.withLock {
             cleaning = false
-            // The next holder hears about cleanup either way, so a home screen and a locked
-            // phone are no surprise.
-            val message =
-                if (failed.isEmpty()) {
-                    "The screen was cleaned up after the last holder: keyboard hidden, home " +
-                        "screen, locked. Unlock it before acting."
-                } else {
-                    "Cleanup after the last holder did not finish: ${failed.joinToString("; ")}. " +
-                        "Check the screen before acting."
-                }
-            pendingCleanup = message
+            pendingCleanup = result.note()
             grantNext()
         }
     }

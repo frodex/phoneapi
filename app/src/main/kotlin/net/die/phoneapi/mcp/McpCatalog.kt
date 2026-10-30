@@ -118,7 +118,7 @@ private val TOOLS: List<McpTool> =
         McpTool(
             name = "screen_release",
             description =
-                "Let the screen go when you are done with it for now, so other clients can use the phone. PhoneAPI goes home and locks it. Your tabs stay yours and background browser work keeps going. The next call that needs the screen takes it again, waiting if someone else has it. Holding the screen idle while another client waits also lets it go, after 30 s.",
+                "Let the screen go when you are done with it for now, so other clients can use the phone. PhoneAPI applies the device owner’s configured release cleanup (home-lock by default). Your tabs stay yours and background browser work keeps going. The next call that needs the screen takes it again, waiting if someone else has it. Holding the screen idle while another client waits also lets it go, after 30 s.",
             scope = Scope.OBSERVE,
             available = always,
             arguments = serializer<EmptyArgs>(),

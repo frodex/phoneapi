@@ -16,13 +16,17 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import net.die.phoneapi.core.ClipImage
 import net.die.phoneapi.lease.Holder
+import net.die.phoneapi.lease.expectedActions
 import net.die.phoneapi.model.PointerOp
 import net.die.phoneapi.model.Scope
+import net.die.phoneapi.model.ScreenCleanupOnRelease
 import net.die.phoneapi.model.ScreenOrientation
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.EnumSource
 
 class ViewerSocketTest {
     private val api = FakeApi()
@@ -199,6 +203,24 @@ class ViewerSocketTest {
                     assertArrayEquals(byteArrayOf(1, 2, 3), frame.readBytes())
                 }
             }
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(ScreenCleanupOnRelease::class)
+    fun `socket close cleanup`(mode: ScreenCleanupOnRelease) {
+        testApplication {
+            api.cleanupPolicy = mode
+            application { phoneApiModule(api.services) }
+            apiClient().use { client ->
+                client.webSocket("/v1/input/pointer", { bearer(secret) }) {
+                    lease(this)
+                    send(Frame.Text("""{"op":"take"}"""))
+                    assertEquals("you", lease(this).holder())
+                }
+            }
+            withTimeout(5.seconds) { while (api.cleanups != 1) delay(10) }
+            assertEquals(expectedActions(mode), api.cleanupActions)
         }
     }
 

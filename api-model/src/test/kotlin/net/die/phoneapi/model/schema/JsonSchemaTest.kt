@@ -14,7 +14,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.serializer
 import net.die.phoneapi.model.LogLevel
 import net.die.phoneapi.model.NodeState
+import net.die.phoneapi.model.ScreenCleanupOnRelease
 import net.die.phoneapi.model.SwipeDirection
+import net.die.phoneapi.model.wire
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -27,6 +29,28 @@ class JsonSchemaTest {
         encodeDefaults = true
         explicitNulls = false
         ignoreUnknownKeys = true
+    }
+
+    @Test
+    fun `cleanup policy wire values`() {
+        val schema = jsonSchema(serializer<ScreenCleanupOnRelease>().descriptor)
+        assertEquals(
+            listOf("home-lock", "home", "none"),
+            schema["enum"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+        for (mode in ScreenCleanupOnRelease.entries) {
+            assertEquals(
+                "\"${mode.wire}\"",
+                json.encodeToString(ScreenCleanupOnRelease.serializer(), mode),
+            )
+            assertEquals(
+                mode,
+                json.decodeFromString<ScreenCleanupOnRelease>("\" ${mode.wire.uppercase()} \""),
+            )
+        }
+        assertThrows<SerializationException> {
+            json.decodeFromString<ScreenCleanupOnRelease>("\"invalid\"")
+        }
     }
 
     @Test

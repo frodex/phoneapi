@@ -9,6 +9,20 @@ import org.junit.jupiter.api.Test
 
 class OpenApiTest {
     @Test
+    fun `device cleanup schema`() {
+        val schemas = phoneApiOpenApi()["components"]!!.jsonObject["schemas"]!!.jsonObject
+        val device = schemas["DeviceInfo"]!!.jsonObject
+        val policy = device["properties"]!!.jsonObject["screenCleanupOnRelease"]!!.jsonObject
+        val values = policy["enum"]!!.jsonArray
+        assertEquals(listOf("home-lock", "home", "none"), values.map { it.jsonPrimitive.content })
+        assertTrue(
+            device["required"]!!.jsonArray.none {
+                it.jsonPrimitive.content == "screenCleanupOnRelease"
+            }
+        )
+    }
+
+    @Test
     fun `document covers every endpoint`() {
         val document = phoneApiOpenApi()
         assertEquals("3.1.0", document["openapi"]!!.jsonPrimitive.content)

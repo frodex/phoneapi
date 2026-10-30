@@ -145,6 +145,7 @@ class AppGraph(
             helperRecoveredAtMs = { helper.recoveredAtMs },
             appFreezer = { appFreezer },
             chromeKept = { chromeKeeper.held },
+            screenCleanupOnRelease = { settings.current.screenCleanupOnRelease },
         )
 
     val tree =
@@ -211,7 +212,12 @@ class AppGraph(
         ScreenLease(
             scope,
             cleanup =
-                ScreenCleanup(input, power, showPlaceholder = { tabs.showPlaceholder() })::run,
+                ScreenCleanup(
+                    input,
+                    power,
+                    showPlaceholder = { tabs.showPlaceholder() },
+                    policy = { settings.current.screenCleanupOnRelease },
+                )::run,
         )
     private val tabs: Tabs =
         Tabs(

@@ -231,7 +231,8 @@ internal suspend fun sessionEnd(
     if (!checkNotNull(services.sessions).end(id)) {
         throw ApiException.notFound("No session you started has that id; it may have ended")
     }
-    "Ended the session: its tabs are closed, and the screen is cleaned up if it held it."
+    "Ended the session: its tabs are closed, and the device's release cleanup policy " +
+        "applies if it held the screen."
 }
 
 /** Lets the session's screen go, with cleanup, keeping the session and its tabs. */
@@ -240,7 +241,7 @@ internal suspend fun screenRelease(services: ServerServices): CallToolResult = r
     val held = services.lease.holds(holder)
     services.lease.release(holder)
     if (held) {
-        "Released the screen. PhoneAPI hides the keyboard, goes home, and locks the phone " +
+        "Released the screen. PhoneAPI applies the device owner’s configured cleanup policy " +
             "before the next client gets it. Your tabs stay yours, and your next call that needs " +
             "the screen takes it again, waiting if someone else has it."
     } else {

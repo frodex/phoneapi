@@ -11,6 +11,7 @@ import net.die.phoneapi.model.Capabilities
 import net.die.phoneapi.model.DeviceInfo
 import net.die.phoneapi.model.DisplayInfo
 import net.die.phoneapi.model.HelperStatus
+import net.die.phoneapi.model.ScreenCleanupOnRelease
 
 /** Builds [DeviceInfo], including the runtime capability map. */
 class DeviceInfoProvider(
@@ -22,6 +23,9 @@ class DeviceInfoProvider(
     private val helperRecoveredAtMs: () -> Long?,
     private val appFreezer: () -> Boolean? = { null },
     private val chromeKept: () -> Boolean = { false },
+    private val screenCleanupOnRelease: () -> ScreenCleanupOnRelease = {
+        ScreenCleanupOnRelease.HOME_LOCK
+    },
 ) {
     private val cachedVersion: String by lazy { readVersion() }
 
@@ -39,6 +43,7 @@ class DeviceInfoProvider(
             uiAutomationConnected = isUiAutomationConnected(),
             appFreezer = appFreezer(),
             chromeKept = chromeKept(),
+            screenCleanupOnRelease = screenCleanupOnRelease(),
             capabilities = capabilities(),
         )
     }

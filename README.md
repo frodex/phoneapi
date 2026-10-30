@@ -122,3 +122,13 @@ Copyright 2026 Aaron Hopkins and contributors. All rights reserved.
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
 `app/src/main/assets/readability/` is Mozilla's [Readability.js](https://github.com/mozilla/readability) 0.6.0, under the Apache License 2.0; see its `LICENSE.md`.
+
+## Screen cleanup
+
+In the app, **When screen control ends** chooses the device-wide release policy:
+
+- **Go home and lock** (`home-lock`, the default): hide the keyboard, show Chrome's blank placeholder, go HOME and lock.
+- **Go home without locking** (`home`): the same steps without the lock.
+- **Do not perform release cleanup** (`none`): skip those four steps.
+
+There is no session override or remote setter. Clients can read the current policy in `GET /v1/device`. Android's normal display timeout still applies, and ending a session still closes its tabs. Neither alternative keeps a phone unlocked indefinitely. See [screen sharing](docs/sharing.md#cleanup) for release and hand-back rules.

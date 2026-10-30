@@ -17,7 +17,7 @@ class ForegroundWatchTest {
     private val a = Holder.Session("a")
     private val b = Holder.Session("b")
     private val scope = CoroutineScope(Dispatchers.Default)
-    private val lease = ScreenLease(scope, cleanup = { emptyList() })
+    private val lease = ScreenLease(scope, cleanup = { CleanupResult() })
     @Volatile private var top = "com.launcher"
     private val reported = mutableListOf<String>()
     private val watch =

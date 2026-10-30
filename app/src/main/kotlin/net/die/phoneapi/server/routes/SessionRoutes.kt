@@ -38,8 +38,8 @@ fun Route.sessionRoutes(services: ServerServices, sessions: McpSessions) {
             services.lease.release(holder)
             val message =
                 if (held) {
-                    "Released the screen. PhoneAPI hides the keyboard, goes home, and locks the " +
-                        "phone before the next client gets it."
+                    "Released the screen. PhoneAPI applies the device owner’s configured cleanup " +
+                        "policy before the next client gets it."
                 } else {
                     "This session did not hold the screen."
                 }

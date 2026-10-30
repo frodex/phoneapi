@@ -6,26 +6,35 @@ import net.die.phoneapi.core.PowerService
 import net.die.phoneapi.model.ActionResult
 import net.die.phoneapi.model.ApiException
 import net.die.phoneapi.model.KeyRequest
+import net.die.phoneapi.model.ScreenCleanupOnRelease
 
 /**
- * Leaves the screen in a known state between holders: keyboard hidden, Chrome on its blank
- * placeholder tab, home, locked. Locking every time, rather than only when someone waits, keeps
- * "locked between holders" simple to check, and the stored PIN makes the next unlock cheap. Returns
- * the steps that failed.
+ * Applies the device owner's release policy, sampled once before any action. The default hides the
+ * keyboard, shows Chrome's blank placeholder, goes home and locks. Failures travel with the policy
+ * snapshot so the next holder receives an accurate account of the cleanup.
  */
 class ScreenCleanup(
     private val input: InputService,
     private val power: PowerService,
     private val showPlaceholder: suspend () -> Unit = {},
+    private val policy: () -> ScreenCleanupOnRelease = { ScreenCleanupOnRelease.HOME_LOCK },
 ) {
-    suspend fun run(): List<String> = buildList {
-        step("hide the keyboard") { input.hideIme() }
-        step("show the blank tab") {
-            showPlaceholder()
-            ActionResult(ok = true)
+    suspend fun run(): CleanupResult {
+        val selected = policy()
+        val failures = buildList {
+            if (selected != ScreenCleanupOnRelease.NONE) {
+                step("hide the keyboard") { input.hideIme() }
+                step("show the blank tab") {
+                    showPlaceholder()
+                    ActionResult(ok = true)
+                }
+                step("go home") { input.key(KeyRequest(key = "HOME")) }
+                if (selected == ScreenCleanupOnRelease.HOME_LOCK) {
+                    step("lock") { power.lock() }
+                }
+            }
         }
-        step("go home") { input.key(KeyRequest(key = "HOME")) }
-        step("lock") { power.lock() }
+        return CleanupResult(selected, failures)
     }
 
     private suspend fun MutableList<String>.step(what: String, block: suspend () -> ActionResult) {

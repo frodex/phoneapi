@@ -11,6 +11,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import net.die.phoneapi.lease.CleanupResult
 import net.die.phoneapi.lease.Holder
 import net.die.phoneapi.lease.ScreenLease
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -22,7 +23,8 @@ import org.junit.jupiter.api.Test
 class McpScreenTest {
     @Test
     fun `notes reach any call`() = runBlocking {
-        val lease = ScreenLease(CoroutineScope(Dispatchers.Unconfined), cleanup = { emptyList() })
+        val lease =
+            ScreenLease(CoroutineScope(Dispatchers.Unconfined), cleanup = { CleanupResult() })
         val holder = Holder.Session("a")
         lease.addNote(holder, "the screen went elsewhere")
         val result =

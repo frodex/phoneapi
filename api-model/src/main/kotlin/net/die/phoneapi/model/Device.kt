@@ -97,6 +97,8 @@ public data class DeviceInfo(
     val screenHolder: String? = null,
     /** How long [screenHolder] has had the screen. */
     val screenHeldMs: Long? = null,
+    /** The device owner's configured policy for release cleanup. */
+    val screenCleanupOnRelease: ScreenCleanupOnRelease = ScreenCleanupOnRelease.HOME_LOCK,
 )
 
 /** Runtime feature flags. A flag is true only when that path works on this device right now. */

@@ -11,6 +11,7 @@ import android.widget.Toast
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import androidx.preference.PreferenceFragmentCompat
@@ -22,7 +23,9 @@ import net.die.phoneapi.PhoneApiApp
 import net.die.phoneapi.R
 import net.die.phoneapi.helperclient.notificationsAllowed
 import net.die.phoneapi.model.HelperStatus
+import net.die.phoneapi.model.ScreenCleanupOnRelease
 import net.die.phoneapi.model.TokenInfo
+import net.die.phoneapi.model.wire
 
 /** Helper, wireless debugging, pairing, and tokens. */
 class SettingsFragment : PreferenceFragmentCompat() {
@@ -35,6 +38,17 @@ class SettingsFragment : PreferenceFragmentCompat() {
             findPreference<Preference>(KEY_WIRELESS)?.isVisible = false
             findPreference<Preference>(KEY_WIRELESS_SETTINGS)?.isVisible = false
             findPreference<Preference>(KEY_PAIR)?.isVisible = false
+        }
+        findPreference<ListPreference>(KEY_CLEANUP)?.setOnPreferenceChangeListener { _, value ->
+            val policy =
+                ScreenCleanupOnRelease.entries.firstOrNull { it.wire == value }
+                    ?: return@setOnPreferenceChangeListener false
+            lifecycleScope.launch {
+                withContext(graph.ioDispatcher) {
+                    graph.settings.update { it.copy(screenCleanupOnRelease = policy) }
+                }
+            }
+            false
         }
         findPreference<SwitchPreferenceCompat>(KEY_HELPER)?.setOnPreferenceChangeListener { _, value
             ->
@@ -68,6 +82,14 @@ class SettingsFragment : PreferenceFragmentCompat() {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 launch { watchControls() }
+                launch {
+                    graph.settings.settings.collect { settings ->
+                        findPreference<ListPreference>(KEY_CLEANUP)?.apply {
+                            value = settings.screenCleanupOnRelease.wire
+                            summary = getString(R.string.cleanup_summary, entry)
+                        }
+                    }
+                }
                 launch { graph.tokens.revision.collect { refreshTokens() } }
             }
         }
@@ -203,6 +225,7 @@ class SettingsFragment : PreferenceFragmentCompat() {
     )
 
     private companion object {
+        const val KEY_CLEANUP = "screenCleanupOnRelease"
         const val KEY_HELPER = "helper"
         const val KEY_WIRELESS = "wireless"
         const val KEY_WIRELESS_SETTINGS = "wireless_settings"

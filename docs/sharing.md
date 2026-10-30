@@ -12,9 +12,9 @@ PhoneAPI owns the rules, because only it knows which calls take the screen and w
 - Background tabs need no lock. Reading and cdp input on a client's own tabs run while someone else holds the screen.
 - Background means background. Chrome never shows a tab whose owner lacks the screen, so a tab behaves the same whether one conversation is running or several. A workflow that only works while its tab is on screen fails every time, not only under load.
 - Waiting is the tool call blocking, not the model polling.
-- The next holder starts from a known screen: home, keyboard hidden, locked.
+- Normal release cleanup with the default `home-lock` prepares the home screen with the keyboard hidden and the phone locked. `home` makes the same preparations without locking; `none` skips them. Viewer hand-back and other no-cleanup exceptions still apply.
 - Every client gets the same rules: MCP clients on HTTP, a person in `/viewer`, and REST. The `phoneapi mcp` stdio relay is retired, as in [The stdio relay](#the-stdio-relay).
-- Not a privacy boundary. Every client uses the same Google and app accounts on the phone, so Chrome history, Maps searches, and app state are shared whatever cleanup does. `device_info` and the `state` on errors still show the foreground package. Cleanup keeps one conversation's screen from greeting the next.
+- Not a privacy boundary. Every client uses the same Google and app accounts on the phone, so Chrome history, Maps searches, and app state are shared whatever cleanup does. `device_info` and the `state` on errors still show the foreground package. The `home-lock` and `home` policies prepare a neutral screen on normal release; `none` skips those preparations. Tab ownership rules still apply in every mode.
 - Not isolation between sites. Tab ownership separates tabs, not cookies, logins, or what a site keeps on its servers. Two conversations on one site can log each other out, share a shopping cart, or trip a site that refuses a second open tab. That is the same problem as two threads editing one Google Doc, and a tab lock cannot fix it. Incognito would separate the state, but it would also drop the logged-in accounts that are the point of using the phone.
 - Not a security boundary either. Any token with the right scope can act as a viewer or open a session. ADB stays the trust boundary.
 
@@ -159,26 +159,31 @@ A session that holds the screen and has made no screen call for 30 seconds, whil
 
 This is what makes PhoneAPI usable by clients other than Legwork. Claude Code, Cursor, and most MCP clients keep one session open for as long as they run, and any request, a `ping` included, keeps a session from expiring. Without the grace period, one screen call from such a client would keep everyone else off the screen until it was idle for 20 minutes or quit.
 
-The cost is that an idle holder can come back to a home screen and a locked phone. That includes a Legwork turn waiting on an Approve button: if another conversation wants the screen meanwhile, the turn resumes on a cleaned-up screen and has to find its place again. Before the grace period, the other conversation got `screen_busy` instead.
+With the default `home-lock` policy, an idle holder can come back to a home screen and a locked phone. That includes a Legwork turn waiting on an Approve button: if another conversation wants the screen meanwhile, the turn resumes on a cleaned-up screen and has to find its place again. Before the grace period, the other conversation got `screen_busy` instead.
 
 A session can also let the screen go itself with `screen_release`, which does the same as the grace period at once: cleanup, then the next waiter. Idle expiry, ending the session from the admin routes, and **Take over** in the viewer still cover a stuck client.
 
 ### Cleanup
 
-When a holder releases the screen or expires, PhoneAPI runs cleanup before granting the next waiter:
+When a holder releases the screen or expires, PhoneAPI applies the device owner's `screenCleanupOnRelease` policy before granting the next waiter. Choose it in the app's **When screen control ends** setting. There is no remote setter or session override.
 
-1. Hide the keyboard.
-2. Show the [placeholder tab](#background-tabs-stay-in-the-background), then HOME, so Chrome is in the background and shows a blank page the next time it comes forward.
-3. Lock. Locking always, rather than only when someone waits, keeps "locked between holders" simple to check, and the stored PIN makes the next unlock cheap.
-4. Clear the clipboard, if the helper can. Whether the shell user can clear it on Android 11 is not checked yet.
+| Value | Release cleanup |
+| --- | --- |
+| `home-lock` (default) | Hide the keyboard, show the blank placeholder tab, go HOME, then lock. |
+| `home` | Hide the keyboard, show the blank placeholder tab, then go HOME. Do not lock. |
+| `none` | Do not perform release cleanup. |
 
-The next holder's first result that needs the screen starts with a note saying that cleanup ran, or which step failed, so a home screen and a locked phone are no surprise and it checks the state before it acts. Until 2026-10-22 only failures were reported, and a session that found the phone cleaned up had no way to tell why.
+The default preserves the existing behavior. Clipboard contents are not cleared by release cleanup. The policy is sampled once when cleanup starts; a setting change applies to the next release. Missing or unknown stored policy values use `home-lock` without changing other settings.
+
+`home` and `none` do not unlock an already locked phone or disable Android's normal display timeout. Session end still closes tabs that session opened, even with `none`, so that mode does not promise an unchanged display. The lease rules, idle clocks, takeover and hand-back behavior are unchanged. A non-holder release does not clean up; viewer hand-back to its existing session skips cleanup.
+
+The next holder receives a note describing the policy that ran, or the steps that failed. Release calls request asynchronous cleanup; their response does not prove it has finished.
 
 Notes waiting for a session appear on its next call of any kind, not only one that needs the screen, so a session that lost the screen while idle hears about it on its next read or `screen_release`. A screen call that waited more than 2 seconds for another holder says so in a note, so a slow call is not mistaken for a slow phone.
 
 A REST call runs as its [session](#rest-sessions), which keeps the screen between calls, so a script's steps are not undone and no other holder takes the screen between them.
 
-Chrome stays in the background after cleanup. When it comes forward for the new holder, it shows one of the holder's tabs or the placeholder, never another holder's page.
+With `home-lock` or `home`, normal release cleanup puts Chrome in the background. `none` does not move Chrome or prepare the placeholder, so the next holder must inspect the screen. Tab ownership still applies in every mode: when a holder brings Chrome forward through PhoneAPI, it shows one of that holder's tabs or the placeholder.
 
 ## Viewer
 

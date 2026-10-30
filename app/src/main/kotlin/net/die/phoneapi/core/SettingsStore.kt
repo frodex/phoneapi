@@ -12,12 +12,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.serializer
+import net.die.phoneapi.model.ScreenCleanupOnRelease
 
 @Serializable
 data class Settings(
     /** Preferred local TCP port for `adb forward` onto the abstract socket. */
     val port: Int,
     val keepAwakeMs: Long = 60_000,
+    @Serializable(with = StoredScreenCleanupSerializer::class)
+    val screenCleanupOnRelease: ScreenCleanupOnRelease = ScreenCleanupOnRelease.HOME_LOCK,
 )
 
 /**

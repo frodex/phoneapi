@@ -57,7 +57,7 @@ One client at a time holds the screen, as [sharing.md](sharing.md) describes. Ca
 
 - A session keeps the screen from its first such call until the session ends, it calls `screen_release`, or it makes no screen call for 30 s while someone else waits. Then cleanup runs and the waiter gets the screen; the session keeps its tabs, and its next screen call waits again and gets a note. REST sessions follow the same rules.
 - A call that needs the screen while someone else has it waits up to 60 s, then fails with 409 `screen_busy`, saying how long the screen has been held.
-- When a holder lets go, PhoneAPI hides the keyboard, puts Chrome on a blank placeholder tab, goes home, and locks the phone before the next holder gets the screen. A step that failed is reported to the next holder: as a `# note:` line first in an MCP tool result, or an `X-PhoneAPI-Note` header on REST.
+- When a holder lets go, PhoneAPI applies the device owner's `screenCleanupOnRelease` policy before the next holder gets the screen. The default `home-lock` hides the keyboard, shows the blank placeholder tab, goes home and locks. `home` omits only lock; `none` does not perform release cleanup. A step that failed is reported to the next holder: as a `# note:` line first in an MCP tool result, or an `X-PhoneAPI-Note` header on REST.
 - Notes waiting for a session appear first on its next call of any kind: that cleanup ran before it got the screen, that it waited more than 2 s for the screen, that its screen went to another client, or that a person used it.
 - While Chrome is in front, it shows the screen holder's tab or the placeholder, never another session's tab. A session without the screen that opens a tab, or whose page opens a popup, gets it behind, with `tookScreen` false.
 - A browser input, `browser_eval`, `browser_navigate`, or `browser_open` call from a session without the screen that brings an app forward fails with 409 `took_screen`. If no one held the screen, that session now does; otherwise the app that was in front comes back and the holder gets a note. Android and Chrome block nearly all of these, so this is a tripwire for workflows that rely on it.
@@ -365,3 +365,9 @@ When node ids are not stable, tool descriptions say so. Raw CDP, streams, and to
 | Node `action` | `click`, `longClick`, `focus`, `clearFocus`, `select`, `setText`, `scrollForward`, `scrollBackward`, `expand`, `collapse`, `dismiss`, `showOnScreen`, `imeEnter`, plus other platform / app-listed names. `imeEnter` needs Android 11. |
 
 Full request and response schemas live in OpenAPI and under `api-model` (`DeviceInfo`, `UiSnapshot`, `TapRequest`, `WaitRequest`, `BrowserTarget`, `ApiError`, …).
+
+## Release cleanup setting
+
+`GET /v1/device` and MCP `device_info` report `screenCleanupOnRelease`: `home-lock` (default), `home`, or `none`. Reading it takes no screen lease. Only the on-device **When screen control ends** setting changes it; there is no remote setter or per-session override.
+
+The policy is read once at cleanup start. `home` still hides the keyboard and shows Chrome's blank placeholder before HOME. `none` skips those steps too. Session end still closes its owned tabs, normal display timeout still applies, and neither mode unlocks a locked phone. Missing or unknown stored values default only this field to `home-lock`. Explicit release, session end/expiry/revocation, idle yield and viewer release share this policy; existing no-holder and viewer hand-back exceptions remain. See [sharing.md](sharing.md#cleanup).

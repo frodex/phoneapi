@@ -7,6 +7,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import net.die.phoneapi.core.BrowserService
 import net.die.phoneapi.core.WaitService
+import net.die.phoneapi.lease.CleanupResult
 import net.die.phoneapi.lease.Holder
 import net.die.phoneapi.lease.ScreenLease
 import net.die.phoneapi.model.ActionResult
@@ -43,7 +44,7 @@ class TabsTest {
     private val browser = RecordingBrowser { front == CHROME }
     private val store = MemoryStore()
     private val lease =
-        ScreenLease(CoroutineScope(Dispatchers.Unconfined), cleanup = { emptyList() })
+        ScreenLease(CoroutineScope(Dispatchers.Unconfined), cleanup = { CleanupResult() })
     private val a = Holder.Session("a")
     private val b = Holder.Session("b")
 

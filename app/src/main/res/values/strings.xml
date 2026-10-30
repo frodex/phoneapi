@@ -24,4 +24,16 @@
     <string name="tokens_title">Computers with access</string>
     <string name="tokens_none">None yet. A computer shows up here after it is granted access.</string>
     <string name="revoke">Remove access</string>
+    <string name="cleanup_title">When screen control ends</string>
+    <string name="cleanup_summary">%1$s. Normal display timeout still applies. Ending a session still closes its tabs.</string>
+    <string-array name="cleanup_entries">
+        <item>Go home and lock (default)</item>
+        <item>Go home without locking</item>
+        <item>Do not perform release cleanup</item>
+    </string-array>
+    <string-array name="cleanup_values" translatable="false">
+        <item>home-lock</item>
+        <item>home</item>
+        <item>none</item>
+    </string-array>
 </resources>

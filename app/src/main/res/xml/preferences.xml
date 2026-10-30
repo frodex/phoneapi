@@ -21,6 +21,12 @@
     <Preference
         android:key="pair"
         android:title="@string/wireless_pair" />
+    <ListPreference
+        android:key="screenCleanupOnRelease"
+        android:persistent="false"
+        android:title="@string/cleanup_title"
+        android:entries="@array/cleanup_entries"
+        android:entryValues="@array/cleanup_values" />
     <PreferenceCategory
         android:key="tokens"
         android:title="@string/tokens_title" />
